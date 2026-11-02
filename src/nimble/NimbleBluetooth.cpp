@@ -650,6 +650,8 @@ class NimbleBluetoothLogRadioCallback : public BLECharacteristicCallbacks
     }
 };
 
+static std::atomic<bool> authenticatedThisBoot{false};
+
 class NimbleBluetoothSecurityCallback : public BLESecurityCallbacks
 {
     void onPassKeyNotify(uint32_t passkey) override
@@ -700,6 +702,14 @@ class NimbleBluetoothSecurityCallback : public BLESecurityCallbacks
         }
 
         LOG_INFO("BLE authentication complete");
+        authenticatedThisBoot.store(true);
+
+        {
+            int bondCount = 0;
+            if (ble_store_util_count(BLE_STORE_OBJ_TYPE_PEER_SEC, &bondCount) == 0 && bondCount > 0) {
+                LOG_INFO("BLE bonded peer count: %d (advertising now bond-gated)", bondCount);
+            }
+        }
 
         meshtastic::BluetoothStatus newStatus(meshtastic::BluetoothStatus::ConnectionState::CONNECTED);
         bluetoothStatus->updateStatus(&newStatus);
@@ -792,8 +802,27 @@ class NimbleBluetoothServerCallback : public BLEServerCallbacks
     }
 };
 
+// Advertising policy: advertise until the first successful authentication of THIS boot, then go
+// quiet - a bonded phone finds an advertising node by scanning; it cannot reconnect to a
+// peripheral that isn't advertising, so the latch must be boot-local (a persisted bond would
+// leave the node permanently invisible). USB power overrides the latch: plugged into any USB
+// host the node always advertises, so a lost bond is recoverable without buttons.
+// authenticatedThisBoot (definition above, before first use in onAuthenticationComplete).
+
+bool NimbleBluetooth::mayAdvertise()
+{
+    if (powerStatus && powerStatus->getHasUSB()) {
+        return true;
+    }
+    return !authenticatedThisBoot.load();
+}
+
 void NimbleBluetooth::startAdvertising()
 {
+    if (!mayAdvertise()) {
+        LOG_DEBUG("BLE advertising suppressed (authenticated this boot, battery powered)");
+        return;
+    }
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->stop();
     pAdvertising->reset();

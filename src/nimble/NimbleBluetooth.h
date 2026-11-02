@@ -13,6 +13,7 @@ class NimbleBluetooth : BluetoothApi
     int getRssi();
     void sendLog(const uint8_t *logMessage, size_t length);
     void startAdvertising();
+    bool mayAdvertise();
     bool isDeInit = false;
 
   private:
